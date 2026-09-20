@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HTML Splitter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --border: #d0d0d0;
+    --accent: #2b6cb0;
+    --accent-fg: #ffffff;
+    --panel: #f6f6f6;
+    --error: #b00020;
+    --ok: #1a7f37;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1e1e1e;
+      --fg: #e8e8e8;
+      --muted: #a0a0a0;
+      --border: #3a3a3a;
+      --accent: #5b9bd5;
+      --accent-fg: #0b1b2b;
+      --panel: #2a2a2a;
+      --error: #ff6b6b;
+      --ok: #5fd18a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1e1e1e;
+    --fg: #e8e8e8;
+    --muted: #a0a0a0;
+    --border: #3a3a3a;
+    --accent: #5b9bd5;
+    --accent-fg: #0b1b2b;
+    --panel: #2a2a2a;
+    --error: #ff6b6b;
+    --ok: #5fd18a;
+  }
+  html, body {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .wrap {
+    width: 100%;
+    max-width: 95%px;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  h1 {
+    font-size: 1.3rem;
+    margin: 0;
+  }
+  .theme-btn {
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  p.desc {
+    color: var(--muted);
+    margin: 0 0 20px 0;
+    font-size: 0.9rem;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  input[type="file"] {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin-bottom: 16px;
+    color: var(--fg);
+  }
+  button {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .log {
+    margin-top: 18px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  .log div {
+    margin-bottom: 4px;
+  }
+  .log .err { color: var(--error); }
+  .log .ok { color: var(--ok); }
+  .log .info { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>HTML Splitter</h1>
+    <button id="themeToggle" class="theme-btn" type="button" title="Przelacz tryb jasny/ciemny">&#9788;</button>
+  </div>
+  <p class="desc">Wczytaj plik .html / .htm. Bloki &lt;style name="..."&gt; i &lt;script name="..."&gt; zostaną wycięte do osobnych plików .css / .js, a w ich miejsce wstawione zostaną odpowiednie odwołania. Wynik pobierzesz jako archiwum ZIP.</p>
+  <div class="panel">
+    <input type="file" id="fileInput" accept=".html,.htm">
+    <button id="processBtn" disabled>Przetwórz i pobierz ZIP</button>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var LT = String.fromCharCode(60);
+  var GT = String.fromCharCode(62);
+
+  var fileInput = document.getElementById("fileInput");
+  var processBtn = document.getElementById("processBtn");
+  var logEl = document.getElementById("log");
+  var themeToggle = document.getElementById("themeToggle");
+
+  var SUN = "\u2600";
+  var MOON = "\u263D";
+  var THEME_KEY = "html-splitter-theme";
+
+  function systemPrefersDark() {
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+
+  function updateToggleIcon(explicitTheme) {
+    var isDark = explicitTheme === "dark" || (!explicitTheme && systemPrefersDark());
+    themeToggle.textContent = isDark ? SUN : MOON;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "light" || theme === "dark") {
+      document.documentElement.setAttribute("data-theme", theme);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+    updateToggleIcon(theme);
+  }
+
+  var savedTheme = null;
+  try {
+    savedTheme = localStorage.getItem(THEME_KEY);
+  } catch (e) {
+    savedTheme = null;
+  }
+  applyTheme(savedTheme);
+
+  themeToggle.addEventListener("click", function () {
+    var current = document.documentElement.getAttribute("data-theme");
+    var isDarkNow = current === "dark" || (!current && systemPrefersDark());
+    var nextTheme = isDarkNow ? "light" : "dark";
+    applyTheme(nextTheme);
+    try {
+      localStorage.setItem(THEME_KEY, nextTheme);
+    } catch (e) {
+      /* brak dostepu do localStorage - preferencja nie zostanie zapamietana */
+    }
+  });
+
+  var selectedFile = null;
+
+  function log(message, kind) {
+    var line = document.createElement("div");
+    if (kind) {
+      line.className = kind;
+    }
+    line.textContent = message;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function clearLog() {
+    logEl.innerHTML = "";
+  }
+
+  fileInput.addEventListener("change", function () {
+    selectedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+    processBtn.disabled = !selectedFile;
+    clearLog();
+    if (selectedFile) {
+      log("Wybrano plik: " + selectedFile.name, "info");
+    }
+  });
+
+  function pad2(n) {
+    var s = n.toString();
+    if (s.length < 2) {
+      s = "0" + s;
+    }
+    return s;
+  }
+
+  function formatTimestamp(d) {
+    return "" + d.getFullYear() +
+      pad2(d.getMonth() + 1) +
+      pad2(d.getDate()) +
+      "-" +
+      pad2(d.getHours()) +
+      pad2(d.getMinutes()) +
+      pad2(d.getSeconds());
+  }
+
+  var DIACRITIC_MAP = {
+    "\u0105": "a", "\u0107": "c", "\u0119": "e", "\u0142": "l",
+    "\u0144": "n", "\u00f3": "o", "\u015b": "s", "\u017a": "z", "\u017c": "z",
+    "\u0104": "A", "\u0106": "C", "\u0118": "E", "\u0141": "L",
+    "\u0143": "N", "\u00d3": "O", "\u015a": "S", "\u0179": "Z", "\u017b": "Z"
+  };
+
+  function sanitizeBaseName(raw) {
+    var noDiacritics = raw.replace(/[\u0104\u0106\u0118\u0141\u0143\u00d3\u015a\u0179\u017b\u0105\u0107\u0119\u0142\u0144\u00f3\u015b\u017a\u017c]/g, function (ch) {
+      return DIACRITIC_MAP[ch] || ch;
+    });
+    var slug = noDiacritics.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (!slug) {
+      slug = "dokument";
+    }
+    return slug;
+  }
+
+  function stripExtension(name) {
+    var idx = name.lastIndexOf(".");
+    if (idx > 0) {
+      return name.substring(0, idx);
+    }
+    return name;
+  }
+
+  function buildRegex(pattern, flags) {
+    return new RegExp(pattern, flags);
+  }
+
+  function extractBaseName(htmlText, originalFileName) {
+    var titlePattern = LT + "title(?:\\s[^" + GT + "]*)?" + GT + "([\\s\\S]*?)" + LT + "\\/title\\s*" + GT;
+    var titleRegex = buildRegex(titlePattern, "i");
+    var match = titleRegex.exec(htmlText);
+    if (match && match[1] && match[1].trim().length > 0) {
+      return sanitizeBaseName(match[1].trim());
+    }
+    return sanitizeBaseName(stripExtension(originalFileName));
+  }
+
+  function extractBlocks(htmlText) {
+    var extractedFiles = [];
+    var errors = [];
+
+    var stylePattern = LT + "style\\s+name\\s*=\\s*(\"|')([^\"']+)\\1[^" + GT + "]*" + GT +
+      "([\\s\\S]*?)" + LT + "\\/style\\s*" + GT;
+    var styleRegex = buildRegex(stylePattern, "gi");
+
+    var usedNames = {};
+
+    function uniqueFileName(name, ext) {
+      var base = name;
+      var candidate = base + "." + ext;
+      var counter = 2;
+      while (usedNames[candidate]) {
+        candidate = base + "-" + counter + "." + ext;
+        counter = counter + 1;
+      }
+      usedNames[candidate] = true;
+      return candidate;
+    }
+
+    var afterStyles = htmlText.replace(styleRegex, function (fullMatch, quote, name, content) {
+      var safeName = sanitizeBaseName(name);
+      if (!safeName) {
+        errors.push("Pominieto blok style z nieprawidlowa nazwa: " + name);
+        return fullMatch;
+      }
+      var fileName = uniqueFileName(safeName, "css");
+      extractedFiles.push({ name: fileName, content: content.replace(/^\s+|\s+$/g, "") + "\n" });
+      return LT + "link rel=" + quote + "stylesheet" + quote + " href=" + quote + fileName + quote + GT;
+    });
+
+    var scriptPattern = LT + "script\\s+name\\s*=\\s*(\"|')([^\"']+)\\1[^" + GT + "]*" + GT +
+      "([\\s\\S]*?)" + LT + "\\/script\\s*" + GT;
+    var scriptRegex = buildRegex(scriptPattern, "gi");
+
+    var afterScripts = afterStyles.replace(scriptRegex, function (fullMatch, quote, name, content) {
+      var safeName = sanitizeBaseName(name);
+      if (!safeName) {
+        errors.push("Pominieto blok script z nieprawidlowa nazwa: " + name);
+        return fullMatch;
+      }
+      var fileName = uniqueFileName(safeName, "js");
+      extractedFiles.push({ name: fileName, content: content.replace(/^\s+|\s+$/g, "") + "\n" });
+      return LT + "script src=" + quote + fileName + quote + GT + LT + "\/script" + GT;
+    });
+
+    return {
+      html: afterScripts,
+      files: extractedFiles,
+      errors: errors
+    };
+  }
+
+  function readFileAsText(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        resolve(reader.result);
+      };
+      reader.onerror = function () {
+        reject(new Error("Nie udalo sie odczytac pliku."));
+      };
+      reader.readAsText(file, "UTF-8");
+    });
+  }
+
+  function triggerDownload(blob, fileName) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  processBtn.addEventListener("click", function () {
+    if (!selectedFile) {
+      return;
+    }
+    clearLog();
+    processBtn.disabled = true;
+    log("Wczytywanie pliku...", "info");
+
+    readFileAsText(selectedFile).then(function (originalText) {
+      log("Analiza bloków style/script...", "info");
+      var baseName = extractBaseName(originalText, selectedFile.name);
+      var result = extractBlocks(originalText);
+
+      if (result.errors.length > 0) {
+        result.errors.forEach(function (e) {
+          log(e, "err");
+        });
+      }
+
+      if (result.files.length === 0) {
+        log("Nie znaleziono zadnych bloków <style name=\"...\"> ani <script name=\"...\">.", "err");
+      } else {
+        result.files.forEach(function (f) {
+          log("Wyodrebniono: " + f.name, "ok");
+        });
+      }
+
+      if (typeof JSZip === "undefined") {
+        log("Blad: nie udalo sie zaladowac biblioteki JSZip (sprawdz polaczenie z siecia).", "err");
+        processBtn.disabled = false;
+        return;
+      }
+
+      var zip = new JSZip();
+      var htmlFileName = selectedFile.name;
+      zip.file(htmlFileName, result.html);
+      result.files.forEach(function (f) {
+        zip.file(f.name, f.content);
+      });
+
+      var timestamp = formatTimestamp(new Date());
+      var zipName = baseName + "-" + timestamp + ".zip";
+
+      log("Pakowanie archiwum ZIP...", "info");
+
+      zip.generateAsync({ type: "blob" }).then(function (blob) {
+        triggerDownload(blob, zipName);
+        log("Gotowe: " + zipName, "ok");
+        processBtn.disabled = false;
+      }).catch(function (err) {
+        log("Blad podczas tworzenia ZIP: " + err.message, "err");
+        processBtn.disabled = false;
+      });
+    }).catch(function (err) {
+      log("Blad: " + err.message, "err");
+      processBtn.disabled = false;
+    });
+  });
+})();
+</script>
+</body>
+</html>
