@@ -87,4 +87,4 @@ oraz dodatkowe pliki `theme.css` i `app.js` z wyodrębnioną zawartością.
 
 ## Licencja
 
-Wybierz licencję odpowiednią dla swojego projektu (np. [MIT](https://choosealicense.com/licenses/mit/)).
+[MIT](https://choosealicense.com/licenses/mit/)
